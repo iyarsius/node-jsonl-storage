@@ -10,12 +10,17 @@ export type NodeJsonlStorageIteratorCallback<T, U> = (item?: T, key?: U) => void
 
 export class NodeJsonlStorage<key = string, item = any> {
     protected path: string;
+    protected isWriteStramBusy = false;
 
     constructor(protected options: INodeJsonlStorageOptions) {
         this.path = this.options.folder ? `${this.options.folder}/${this.options.name}.jsonl`.replace('//', '/') : `${this.options.name}.jsonl`;
         // create the file
         if (!existsSync(this.path)) appendFileSync(this.path, '');
-    }
+    };
+
+    protected async waitForWrite() {
+        while (this.isWriteStramBusy) await new Promise((x) => setTimeout(x, 5));
+    };
 
     clear() {
         unlinkSync(this.path);
@@ -23,6 +28,8 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async getItem(key: key): Promise<item | null> {
+        await this.waitForWrite();
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -44,6 +51,8 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async iterate(iteratorCallback: NodeJsonlStorageIteratorCallback<item, key>): Promise<void> {
+        await this.waitForWrite();
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -61,6 +70,8 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async key(keyIndex: number): Promise<key | null> {
+        await this.waitForWrite();
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -83,6 +94,8 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async keys(): Promise<key[]> {
+        await this.waitForWrite();
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -100,6 +113,8 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async length(): Promise<number> {
+        await this.waitForWrite();
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -114,6 +129,9 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async removeItem(key: key): Promise<void> {
+        await this.waitForWrite();
+        this.isWriteStramBusy = true;
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -137,10 +155,15 @@ export class NodeJsonlStorage<key = string, item = any> {
         });
 
         unlinkSync(this.path);
-        renameSync(tempPath, this.path)
+        renameSync(tempPath, this.path);
+
+        this.isWriteStramBusy = false;
     }
 
     async setItem(key: key, item: item): Promise<item> {
+        await this.waitForWrite();
+        this.isWriteStramBusy = true;
+
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -172,6 +195,8 @@ export class NodeJsonlStorage<key = string, item = any> {
 
         unlinkSync(this.path);
         renameSync(tempPath, this.path);
+
+        this.isWriteStramBusy = false;
 
         return item;
     };
