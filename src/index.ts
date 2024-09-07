@@ -6,7 +6,7 @@ export interface INodeJsonlStorageOptions {
     folder?: string;
 };
 
-export type NodeJsonlStorageIteratorCallback<T> = (item?: T) => void;
+export type NodeJsonlStorageIteratorCallback<T, U> = (item?: T, key?: U) => void;
 
 export class NodeJsonlStorage<key = string, item = any> {
     protected path: string;
@@ -43,7 +43,7 @@ export class NodeJsonlStorage<key = string, item = any> {
         });
     }
 
-    async iterate(iteratorCallback: NodeJsonlStorageIteratorCallback<item>): Promise<void> {
+    async iterate(iteratorCallback: NodeJsonlStorageIteratorCallback<item, key>): Promise<void> {
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -52,8 +52,8 @@ export class NodeJsonlStorage<key = string, item = any> {
 
         await new Promise(resolve => {
             rl.on('line', (line) => {
-                const json = JSON.parse(line).data;
-                iteratorCallback(json);
+                const json = JSON.parse(line);
+                iteratorCallback(json.data, json.key);
             });
 
             rl.on("close", () => resolve(null))
