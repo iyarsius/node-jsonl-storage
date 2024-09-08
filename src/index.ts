@@ -6,11 +6,16 @@ export interface INodeJsonlStorageOptions {
     folder?: string;
 };
 
-export type NodeJsonlStorageIteratorCallback<T, U> = (item?: T, key?: U) => void;
+export type NodeJsonlStorageIteratorCallback<T, U> = (item: T, key: U) => void;
 
 export class NodeJsonlStorage<key = string, item = any> {
     protected path: string;
-    protected isWriteStramBusy = false;
+    protected isWriteStreamBusy = false;
+    protected isRemoveItemBusy: boolean = false;
+    protected isSetItemBusy: boolean = false;
+
+    protected setItemQueue: { key: key, item: item }[] = [];
+    protected removeItemQueue: key[] = [];
 
     constructor(protected options: INodeJsonlStorageOptions) {
         this.path = this.options.folder ? `${this.options.folder}/${this.options.name}.jsonl`.replace('//', '/') : `${this.options.name}.jsonl`;
@@ -19,12 +24,14 @@ export class NodeJsonlStorage<key = string, item = any> {
     };
 
     protected async waitForWrite() {
-        while (this.isWriteStramBusy) await new Promise((x) => setTimeout(x, 5));
+        while (this.isWriteStreamBusy) await new Promise((x) => setTimeout(x, 5));
     };
 
     clear() {
+        this.isWriteStreamBusy = true;
         unlinkSync(this.path);
         appendFileSync(this.path, '');
+        this.isWriteStreamBusy = false;
     }
 
     async getItem(key: key): Promise<item | null> {
@@ -129,8 +136,13 @@ export class NodeJsonlStorage<key = string, item = any> {
     }
 
     async removeItem(key: key): Promise<void> {
+        this.removeItemQueue.push(key);
+
+        if (this.isRemoveItemBusy) return;
+        this.isRemoveItemBusy = true;
+
         await this.waitForWrite();
-        this.isWriteStramBusy = true;
+        this.isWriteStreamBusy = true;
 
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
@@ -142,9 +154,11 @@ export class NodeJsonlStorage<key = string, item = any> {
         const tempFileStream = createWriteStream(tempPath);
 
         await new Promise(resolve => {
+            const queue = this.removeItemQueue.splice(0, this.removeItemQueue.length + 1);
+
             rl.on('line', (line) => {
                 const json = JSON.parse(line);
-                if (json.key === key) return;
+                if (queue.includes(json.key)) return;
 
                 tempFileStream.write(`${line}\n`)
             });
@@ -157,13 +171,11 @@ export class NodeJsonlStorage<key = string, item = any> {
         unlinkSync(this.path);
         renameSync(tempPath, this.path);
 
-        this.isWriteStramBusy = false;
-    }
+        this.isWriteStreamBusy = false;
+        this.isRemoveItemBusy = false;
+    };
 
-    async setItem(key: key, item: item): Promise<item> {
-        await this.waitForWrite();
-        this.isWriteStramBusy = true;
-
+    protected async _insertSetItemQueue(): Promise<void> {
         const stream = createReadStream(this.path);
         const rl = readline.createInterface({
             input: stream,
@@ -174,20 +186,25 @@ export class NodeJsonlStorage<key = string, item = any> {
         const tempFileStream = createWriteStream(tempPath);
 
         await new Promise(resolve => {
-            const stringified = JSON.stringify({ key: key, data: item });
-            let updated = false;
+            const queue = this.setItemQueue.splice(0, this.setItemQueue.length + 1);
+            const queueMap = new Map(queue.map(({ key, item }) => [key, item]));
 
             rl.on('line', (line) => {
                 const json = JSON.parse(line);
-                if (json.key === key) {
-                    line = stringified;
-                    updated = true;
+                const queueItem = queueMap.get(json.key);
+                if (queueItem) {
+                    line = JSON.stringify({ key: json.key, data: queueItem });
+                    queueMap.delete(json.key);
                 }
 
                 tempFileStream.write(`${line}\n`)
             });
             rl.on("close", () => {
-                if (!updated) tempFileStream.write(`${stringified}\n`);
+                if (queueMap.size > 0) {
+                    const arr = Array.from(queueMap, ([key, value]) => ({ key: key, data: value }));
+                    const str = arr.map(obj => JSON.stringify(obj)).join('\n');
+                    tempFileStream.write(str);
+                }
                 tempFileStream.end();
                 resolve(null);
             });
@@ -195,8 +212,21 @@ export class NodeJsonlStorage<key = string, item = any> {
 
         unlinkSync(this.path);
         renameSync(tempPath, this.path);
+    }
 
-        this.isWriteStramBusy = false;
+    async setItem(key: key, item: item): Promise<item> {
+        this.setItemQueue.push({ key, item });
+
+        if (this.isSetItemBusy) return item;
+        this.isSetItemBusy = true;
+
+        await this.waitForWrite();
+        this.isWriteStreamBusy = true;
+
+        await this._insertSetItemQueue();
+
+        this.isWriteStreamBusy = false;
+        this.isSetItemBusy = false;
 
         return item;
     };
